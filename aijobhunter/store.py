@@ -14,7 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterator, Optional
 
-from .models import ApplyDraft, Job, JobEnrichment, JobScore, PipelineStatus, RawJob
+from .models import ApplyDraft, Job, JobScore, PipelineStatus, RawJob
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     raw_text        TEXT DEFAULT '',
     collected_at    TEXT NOT NULL,
     job_json        TEXT,
-    enrichment_json TEXT,
     score_json      TEXT,
     draft_json      TEXT,
     updated_at      TEXT NOT NULL,
@@ -50,8 +49,9 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a DB was first created."""
         cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(jobs)")}
-        if "enrichment_json" not in cols:
-            self._conn.execute("ALTER TABLE jobs ADD COLUMN enrichment_json TEXT")
+        for col in ("score_json", "draft_json"):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
 
     def close(self) -> None:
         self._conn.close()
@@ -112,87 +112,53 @@ class Store:
         self._set_json(job.source, job.external_id, "job_json", job.model_dump(mode="json"))
         self._set_status(job.source, job.external_id, PipelineStatus.PARSED)
 
-    # ---- enrich (optional augmentation; does not change pipeline status) ----
+    # ---- filter (keyword-only) ----
 
-    def iter_jobs_for_enrich(self) -> Iterator[Job]:
-        """Yield parsed jobs that have not been enriched yet."""
-        cur = self._conn.execute(
-            "SELECT * FROM jobs WHERE status = ? AND enrichment_json IS NULL",
-            (PipelineStatus.PARSED.value,),
-        )
-        for row in cur.fetchall():
-            if row["job_json"]:
-                yield Job.model_validate_json(row["job_json"])
-
-    def save_enrichment(self, job: Job, enrichment: JobEnrichment) -> None:
-        self._set_json(
-            job.source, job.external_id, "enrichment_json", enrichment.model_dump(mode="json")
-        )
-
-    def get_enrichment(self, source: str, external_id: str) -> Optional[JobEnrichment]:
-        cur = self._conn.execute(
-            "SELECT enrichment_json FROM jobs WHERE source = ? AND external_id = ?",
-            (source, external_id),
-        )
-        row = cur.fetchone()
-        if row and row["enrichment_json"]:
-            return JobEnrichment.model_validate_json(row["enrichment_json"])
-        return None
-
-    # ---- score ----
-
-    def iter_jobs_for_score(self) -> Iterator[Job]:
+    def iter_jobs_for_filter(self) -> Iterator[Job]:
+        """Yield parsed jobs awaiting keyword filtering."""
         yield from self._iter_jobs_at(PipelineStatus.PARSED)
+
+    def set_filter_result(self, job: Job, kept: bool) -> None:
+        """Persist the keyword-match result and mark the job kept or rejected."""
+        self._set_json(job.source, job.external_id, "job_json", job.model_dump(mode="json"))
+        self._set_status(
+            job.source,
+            job.external_id,
+            PipelineStatus.FILTERED if kept else PipelineStatus.REJECTED,
+        )
+
+    def iter_filtered(self) -> Iterator[Job]:
+        """Yield jobs that passed keyword filtering (for CSV / TUI)."""
+        yield from self._iter_jobs_at(PipelineStatus.FILTERED)
+
+    def get_job(self, source: str, external_id: str) -> Optional[Job]:
+        row = self._conn.execute(
+            "SELECT job_json FROM jobs WHERE source = ? AND external_id = ?",
+            (source, external_id),
+        ).fetchone()
+        return Job.model_validate_json(row["job_json"]) if row and row["job_json"] else None
+
+    # ---- on-demand artifacts (do NOT change pipeline status) ----
 
     def save_score(self, job: Job, score: JobScore) -> None:
         self._set_json(job.source, job.external_id, "score_json", score.model_dump(mode="json"))
-        self._set_status(job.source, job.external_id, PipelineStatus.SCORED)
 
-    # ---- draft ----
-
-    def iter_jobs_for_draft(self, min_score: int) -> Iterator[tuple[Job, JobScore]]:
-        for row in self._rows_at(PipelineStatus.SCORED):
-            score = JobScore.model_validate_json(row["score_json"])
-            if score.fit_score >= min_score:
-                yield Job.model_validate_json(row["job_json"]), score
+    def get_score(self, source: str, external_id: str) -> Optional[JobScore]:
+        row = self._conn.execute(
+            "SELECT score_json FROM jobs WHERE source = ? AND external_id = ?",
+            (source, external_id),
+        ).fetchone()
+        return JobScore.model_validate_json(row["score_json"]) if row and row["score_json"] else None
 
     def save_draft(self, job: Job, draft: ApplyDraft) -> None:
         self._set_json(job.source, job.external_id, "draft_json", draft.model_dump(mode="json"))
-        self._set_status(job.source, job.external_id, PipelineStatus.DRAFTED)
 
-    # ---- export ----
-
-    def iter_for_export(self, min_score: int) -> Iterator[tuple[Job, JobScore, Optional[ApplyDraft]]]:
-        """Yield scored jobs above threshold, plus their draft if one exists."""
-        cur = self._conn.execute(
-            "SELECT * FROM jobs WHERE status IN (?, ?, ?)",
-            (
-                PipelineStatus.SCORED.value,
-                PipelineStatus.DRAFTED.value,
-                PipelineStatus.EXPORTED.value,
-            ),
-        )
-        for row in cur.fetchall():
-            if not row["score_json"] or not row["job_json"]:
-                continue
-            score = JobScore.model_validate_json(row["score_json"])
-            if score.fit_score < min_score:
-                continue
-            draft = ApplyDraft.model_validate_json(row["draft_json"]) if row["draft_json"] else None
-            yield Job.model_validate_json(row["job_json"]), score, draft
-
-    def mark_exported(self, source: str, external_id: str) -> None:
-        self._set_status(source, external_id, PipelineStatus.EXPORTED)
-
-    # ---- csv export (any parsed job, regardless of score) ----
-
-    def iter_all_jobs(self) -> Iterator[tuple[Job, Optional[JobScore]]]:
-        """Yield every job that has been parsed, with its score if one exists."""
-        cur = self._conn.execute("SELECT * FROM jobs WHERE job_json IS NOT NULL")
-        for row in cur.fetchall():
-            job = Job.model_validate_json(row["job_json"])
-            score = JobScore.model_validate_json(row["score_json"]) if row["score_json"] else None
-            yield job, score
+    def get_draft(self, source: str, external_id: str) -> Optional[ApplyDraft]:
+        row = self._conn.execute(
+            "SELECT draft_json FROM jobs WHERE source = ? AND external_id = ?",
+            (source, external_id),
+        ).fetchone()
+        return ApplyDraft.model_validate_json(row["draft_json"]) if row and row["draft_json"] else None
 
     # ---- helpers ----
 

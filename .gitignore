@@ -9,6 +9,11 @@ __pycache__/
 data/
 output/
 
+# User config (only the *.example.yaml templates are tracked)
+config/portals.yaml
+config/profile.yaml
+config/keywords.yaml
+
 # OS / editor
 .DS_Store
 .idea/

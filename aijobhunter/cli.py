@@ -1,9 +1,11 @@
 """Command-line interface for AIJobHunter.
 
-Examples:
-    python -m aijobhunter run                 # full pipeline: collect..export
-    python -m aijobhunter run --stages collect,parse,score
-    python -m aijobhunter status              # show pipeline counts
+Workflow:
+    python -m aijobhunter keywords     # 1+2: extract keywords from résumé, edit, add exclusions
+    python -m aijobhunter run          # 3: collect → parse → keyword-filter → CSV (no LLM)
+    python -m aijobhunter browse       # 4: TUI — assess fit / draft per job on demand
+    python -m aijobhunter status       # show pipeline counts
+    python -m aijobhunter export-csv   # re-export the CSV
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import json
 import logging
 import sys
 
-from .config import Settings
+from .config import Settings, load_keywords, load_profile, save_keywords
 from .pipeline import STAGE_ORDER, run_pipeline
 from .store import Store
 
@@ -29,12 +31,18 @@ def _parse_stages(value: str) -> list[str]:
     return [s.strip() for s in value.split(",") if s.strip()]
 
 
+def _csv_list(value: str) -> list[str]:
+    return [s.strip() for s in value.split(",") if s.strip()]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aijobhunter", description="Multi-portal AI job hunter")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run_cmd = sub.add_parser("run", help="run pipeline stages")
+    sub.add_parser("keywords", help="extract search keywords from your résumé (interactive)")
+
+    run_cmd = sub.add_parser("run", help="collect → parse → keyword-filter → CSV")
     run_cmd.add_argument(
         "--stages",
         type=_parse_stages,
@@ -42,9 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"comma-separated subset of {','.join(STAGE_ORDER)} (default: all)",
     )
 
+    sub.add_parser("browse", help="open the TUI to assess/draft jobs on demand")
     sub.add_parser("status", help="show how many jobs sit at each pipeline status")
 
-    csv_cmd = sub.add_parser("export-csv", help="export all listed jobs to a CSV file")
+    csv_cmd = sub.add_parser("export-csv", help="export kept jobs to a CSV file")
     csv_cmd.add_argument(
         "path",
         nargs="?",
@@ -54,14 +63,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _cmd_keywords(settings: Settings) -> int:
+    """Interactive: LLM proposes keywords → user edits → adds exclusions → save."""
+    from .ai.provider import build_llm_client
+    from .stages.keywords import extract_keywords
+
+    profile = load_profile(settings)
+    print("Extracting keywords from your résumé via the local LLM…")
+    proposed = extract_keywords(build_llm_client(settings), profile)
+
+    if proposed:
+        print("\nProposed include keywords:\n  " + ", ".join(proposed))
+    else:
+        print("\nThe model returned no keywords — enter your own below.")
+
+    reply = input(
+        "\nPress Enter to accept, or type a comma-separated list to replace: "
+    ).strip()
+    include = _csv_list(reply) if reply else proposed
+
+    # Preserve any previously configured exclusions as the default hint.
+    try:
+        existing_exclude = load_keywords(settings)["exclude"]
+    except Exception:  # noqa: BLE001
+        existing_exclude = []
+    hint = f" (current: {', '.join(existing_exclude)})" if existing_exclude else ""
+    excl_reply = input(f"Enter EXCLUDE keywords, comma-separated{hint}: ").strip()
+    exclude = _csv_list(excl_reply) if excl_reply else existing_exclude
+
+    path = save_keywords(settings, include, exclude)
+    print(f"\nSaved {len(include)} include and {len(exclude)} exclude keyword(s) to {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _configure_logging(args.verbose)
     settings = Settings()
 
+    if args.command == "keywords":
+        return _cmd_keywords(settings)
+
     if args.command == "run":
         summary = run_pipeline(settings, args.stages)
         print(json.dumps(summary, indent=2, default=str))
+        return 0
+
+    if args.command == "browse":
+        from .tui.app import run_browser
+
+        run_browser(settings)
         return 0
 
     if args.command == "status":

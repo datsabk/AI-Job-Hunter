@@ -3,9 +3,13 @@
 The pipeline moves a job through these shapes:
 
     RawJob   -> what a SourceAdapter collected (mostly unstructured)
-    Job      -> structured fields extracted from the raw payload
-    JobScore -> the AI's fit assessment for a Job
+    Job      -> structured fields extracted from the raw payload, plus the
+                keyword-match result (score + matched keywords)
+    JobScore -> an on-demand LLM fit assessment for a single Job
     ApplyDraft -> a ready-to-review application artifact
+
+Bulk matching is purely keyword-based; ``JobScore`` and ``ApplyDraft`` are only
+produced on demand, per job, from the TUI.
 
 ``PipelineStatus`` tracks how far a stored job has progressed so each stage can
 pick up exactly the rows it still needs to process (making the pipeline
@@ -16,7 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -30,9 +34,8 @@ class PipelineStatus(str, Enum):
 
     COLLECTED = "collected"
     PARSED = "parsed"
-    SCORED = "scored"
-    DRAFTED = "drafted"
-    EXPORTED = "exported"
+    FILTERED = "filtered"  # passed keyword filtering — kept
+    REJECTED = "rejected"  # failed keyword filtering — excluded
 
 
 class ApplyChannel(str, Enum):
@@ -73,30 +76,17 @@ class Job(BaseModel):
     salary: str = ""
     remote: str = ""
     posted_at: str = ""
+    # Keyword-match result (set by the filter stage).
+    keyword_score: int = 0  # number of include-keyword hits
+    matched_keywords: list[str] = Field(default_factory=list)
 
 
 class JobScore(BaseModel):
-    """The AI's relevance assessment for a Job."""
+    """An on-demand LLM fit assessment for a single Job."""
 
     fit_score: int = Field(ge=0, le=100)
     reason: str = ""
     recommended: bool = False
-
-
-class JobEnrichment(BaseModel):
-    """Structured fields extracted from a job description by the LLM.
-
-    Produced by the ``enrich`` stage to sharpen matching, filtering, and export
-    beyond the free-text description.
-    """
-
-    skills: list[str] = Field(default_factory=list)
-    seniority: str = ""  # e.g. junior / mid / senior / staff / lead
-    must_haves: list[str] = Field(default_factory=list)
-    nice_to_haves: list[str] = Field(default_factory=list)
-    compensation: str = ""
-    remote_mode: str = ""  # remote / hybrid / onsite / unknown
-    summary: str = ""  # one-line role summary
 
 
 class ApplyDraft(BaseModel):

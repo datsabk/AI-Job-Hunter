@@ -16,6 +16,8 @@ def test_job_defaults_channel_unknown():
     job = Job(source="linkedin", external_id="2", url="http://x")
     assert job.apply_channel is ApplyChannel.UNKNOWN
     assert job.contact_email == ""
+    assert job.keyword_score == 0
+    assert job.matched_keywords == []
 
 
 def test_jobscore_bounds():
@@ -37,5 +39,5 @@ def test_applydraft_roundtrip():
 def test_pipeline_status_values():
     assert PipelineStatus.COLLECTED.value == "collected"
     assert {s.value for s in PipelineStatus} == {
-        "collected", "parsed", "scored", "drafted", "exported"
+        "collected", "parsed", "filtered", "rejected"
     }

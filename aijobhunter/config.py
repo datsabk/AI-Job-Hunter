@@ -1,8 +1,9 @@
 """Central configuration: environment settings plus YAML config loaders.
 
 Environment variables are injected via python-dotenv so a local ``.env`` file is
-picked up automatically. Two YAML files carry the non-secret config: the list of
-portals to scan and the candidate profile used for scoring/drafting.
+picked up automatically. Three YAML files carry the non-secret config: the
+portals to scan, the candidate profile, and the include/exclude keywords used by
+the filter stage.
 """
 
 from __future__ import annotations
@@ -47,11 +48,16 @@ class Settings:
     profile_config: str = field(
         default_factory=lambda: _env("AIJOBHUNTER_PROFILE_CONFIG", "./config/profile.yaml")
     )
+    keywords_config: str = field(
+        default_factory=lambda: _env("AIJOBHUNTER_KEYWORDS_CONFIG", "./config/keywords.yaml")
+    )
 
     # Relevance / browser
     score_threshold: int = field(
         default_factory=lambda: int(_env("AIJOBHUNTER_SCORE_THRESHOLD", "70"))
     )
+    # Max jobs a single batch action (assess-fit / draft) processes in the TUI.
+    batch_size: int = field(default_factory=lambda: int(_env("AIJOBHUNTER_BATCH_SIZE", "5")))
     browser_profile_dir: str = field(
         default_factory=lambda: _env(
             "AIJOBHUNTER_BROWSER_PROFILE_DIR", "./data/browser-profile"
@@ -93,3 +99,21 @@ def load_profile(settings: Settings) -> dict[str, Any]:
 
         data["resume_text"] = read_document(resume_file)
     return data
+
+
+def load_keywords(settings: Settings) -> dict[str, list[str]]:
+    """Return ``{"include": [...], "exclude": [...]}`` from the keywords YAML."""
+    data = load_yaml(settings.keywords_config)
+    return {
+        "include": [str(k).strip() for k in data.get("include", []) if str(k).strip()],
+        "exclude": [str(k).strip() for k in data.get("exclude", []) if str(k).strip()],
+    }
+
+
+def save_keywords(settings: Settings, include: list[str], exclude: list[str]) -> str:
+    """Write include/exclude keywords to the keywords YAML. Returns the path."""
+    path = Path(settings.keywords_config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump({"include": include, "exclude": exclude}, fh, sort_keys=False)
+    return str(path)
