@@ -1,59 +1,57 @@
 # AIJobHunter portal configuration
 #
 # Each entry describes one place to collect jobs from. `adapter` selects the
-# SourceAdapter implementation (see aijobhunter/sources/registry.py). Add as many
-# entries as you like across different portals.
+# SourceAdapter implementation (see aijobhunter/sources/registry.py).
+#
+# AGGREGATOR-FIRST: Remotive + RSS pull role-relevant jobs across MANY companies
+# with no company list — your keyword filter (from `aijobhunter keywords`)
+# narrows them to your roles. Company-specific boards (greenhouse/lever/ashby)
+# and LinkedIn are kept below but disabled; enable them to target one employer.
+#
+# NOTE: Greenhouse/Lever/Ashby have no global search API — they are per-company
+# by design. For cross-company discovery by role, use the aggregators below.
 
 portals:
-  # --- Greenhouse: public JSON board API, no browser, near-zero risk. ---
-  # `company` is the board token from a URL like boards.greenhouse.io/<company>.
-  - adapter: greenhouse
-    enabled: true
-    company: stripe
-    # Optional: only keep postings whose title matches one of these substrings
-    # (case-insensitive). Leave empty to keep all and let the AI score them.
-    title_includes: []
+  # ================= Aggregators (role-based, cross-company) =================
 
-  # --- Lever: public postings API (jobs.lever.co/<company>), no browser. ---
-  - adapter: lever
-    enabled: false
-    company: netflix
-    title_includes: []
-
-  # --- Ashby: public job-board API (jobs.ashbyhq.com/<board>), no browser. ---
-  - adapter: ashby
-    enabled: false
-    company: ramp
-    title_includes: []
-
-  # --- Remotive: public JSON API of remote jobs, no browser, no auth. ---
-  # Categories: software-dev, devops, data, design, product, etc.
+  # Remotive: public JSON API. Categories: software-dev, devops, data, design,
+  # product, etc. Pull a whole category and let the keyword filter narrow it.
   - adapter: remotive
-    enabled: false
+    enabled: true
     category: software-dev
-    search: platform engineer
-    limit: 50
+    limit: 100
 
-  # --- RSS: generic job feeds (Remotive / We Work Remotely / RWFA / ...). ---
+  # RSS: cross-company remote job feeds (We Work Remotely / RWFA / Remotive).
   - adapter: rss
-    enabled: false
+    enabled: true
     feeds:
-      - url: https://remotive.com/remote-jobs/feed/devops
-        label: rss:remotive-devops
       - url: https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss
         label: rss:wwr-backend
       - url: https://realworkfromanywhere.com/remote-backend-jobs/rss.xml
         label: rss:rwfa-backend
 
-  # --- LinkedIn: automates YOUR logged-in browser. Higher risk (ToS). ---
-  # Point `urls` at a saved job search or the feed. Runs attended (visible
-  # browser) by default so you can handle login / 2FA and watch it work.
+  # ================= Company-specific boards (disabled by default) ===========
+  - adapter: greenhouse   # boards.greenhouse.io/<company>
+    enabled: false
+    company: stripe
+    title_includes: []
+
+  - adapter: lever        # jobs.lever.co/<company>
+    enabled: false
+    company: netflix
+    title_includes: []
+
+  - adapter: ashby        # jobs.ashbyhq.com/<board>
+    enabled: false
+    company: ramp
+    title_includes: []
+
+  # ================= LinkedIn (opt-in, ToS risk, needs a browser) ============
   - adapter: linkedin
     enabled: false
     urls:
       - https://www.linkedin.com/jobs/search/?keywords=platform%20engineer&f_WT=2
-    # Safety caps for the browsing session.
-    max_cards: 25          # stop after collecting this many job cards
-    max_minutes: 10        # hard wall-clock cap for the session
-    headless: false        # keep visible so you can intervene
-    scroll_pause_seconds: [2.0, 5.0]   # randomized human-like pause range
+    max_cards: 25
+    max_minutes: 10
+    headless: false
+    scroll_pause_seconds: [2.0, 5.0]
