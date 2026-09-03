@@ -1,0 +1,23 @@
+# AIJobHunter candidate profile
+#
+# Used by the AI to (1) score how well each job fits you and (2) draft tailored
+# applications. `resume_text` can be pasted inline or pointed at a file via
+# `resume_file` (a .txt/.md path relative to the project root).
+
+name: Abhishek Kothari
+email: abhishek@abhishekkothari.in
+phone: "+91-9408941843"
+location: Remote (India,Anywhere)
+linkedin: https://www.linkedin.com/in/datsabk
+website: https://abhishekkothari.in
+
+# Short statement of what you're looking for — the AI uses this for scoring.
+objective: >
+  Senior backend / platform engineering roles, remote-first, working on
+  distributed systems, developer tooling, or infrastructure. Prefer companies
+  with a strong engineering culture.
+
+resume_file: /Users/abhishekkothari/Downloads/Abhishek-Kothari-CV.txt
+
+# Attached to email applications when present (path relative to project root).
+resume_attachment: /Users/abhishekkothari/Downloads/CV-Abhishek-Kothari.docx
