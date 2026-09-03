@@ -9,6 +9,11 @@ can get an account restricted. It is therefore built defensively:
 * **hard caps** on cards collected and wall-clock minutes;
 * **randomized, human-like** scroll pauses.
 
+Browser profile: by default a dedicated Playwright profile (log in once, it's
+remembered). Set ``use_real_chrome: true`` to instead launch your installed
+Google Chrome against your real profile (already logged in) — Chrome must be
+fully quit first, since it locks the profile while running.
+
 LinkedIn's DOM changes often, so selectors are intentionally broad and every
 step is wrapped defensively — a layout change degrades to "collected fewer
 jobs", not a crash.
@@ -17,9 +22,12 @@ jobs", not a crash.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import re
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from ..config import Settings
@@ -49,19 +57,14 @@ class LinkedInSource(SourceAdapter):
 
         max_cards = int(config.get("max_cards", 25))
         max_minutes = float(config.get("max_minutes", 10))
-        headless = bool(config.get("headless", False))
         pause_range = config.get("scroll_pause_seconds", [2.0, 5.0])
-        profile_dir = config.get("browser_profile_dir") or Settings().browser_profile_dir
         label = config.get("label", "linkedin")
 
         deadline = time.monotonic() + max_minutes * 60
         collected: dict[str, RawJob] = {}
 
         with sync_playwright() as pw:
-            context = pw.chromium.launch_persistent_context(
-                user_data_dir=profile_dir,
-                headless=headless,
-            )
+            context = self._launch_context(pw, config)
             page = context.pages[0] if context.pages else context.new_page()
             try:
                 for url in urls:
@@ -75,6 +78,43 @@ class LinkedInSource(SourceAdapter):
 
         logger.info("LinkedIn: collected %d job(s)", len(collected))
         return list(collected.values())
+
+    def _launch_context(self, pw: Any, config: dict[str, Any]) -> Any:
+        """Create the browser context.
+
+        Two modes:
+        * ``use_real_chrome: true`` — launch your installed Google Chrome against
+          your real profile (so you're already logged in). Chrome must be FULLY
+          QUIT first (it locks the profile).
+        * default — a dedicated persistent Playwright profile (log in once).
+        """
+        headless = bool(config.get("headless", False))
+
+        if config.get("use_real_chrome"):
+            user_data_dir = config.get("chrome_user_data_dir") or _default_chrome_user_data_dir()
+            profile = config.get("chrome_profile", "Default")
+            logger.info(
+                "LinkedIn: launching your real Chrome (profile '%s' at %s). "
+                "Chrome must be fully quit or this will fail on the profile lock.",
+                profile,
+                user_data_dir,
+            )
+            try:
+                return pw.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    channel="chrome",  # your installed Google Chrome, not bundled Chromium
+                    headless=headless,
+                    args=[f"--profile-directory={profile}"],
+                )
+            except Exception as exc:  # noqa: BLE001 - give an actionable message
+                raise RuntimeError(
+                    "Could not launch your real Chrome profile. Make sure Google Chrome "
+                    "is FULLY QUIT (Cmd-Q — it locks the profile while running) and that "
+                    f"the profile path exists: {user_data_dir}. Original error: {exc}"
+                ) from exc
+
+        profile_dir = config.get("browser_profile_dir") or Settings().browser_profile_dir
+        return pw.chromium.launch_persistent_context(user_data_dir=profile_dir, headless=headless)
 
     def _collect_from_url(
         self,
@@ -161,3 +201,13 @@ class LinkedInSource(SourceAdapter):
     def _sleep(pause_range: list[float]) -> None:
         low, high = (pause_range + [pause_range[-1]])[:2] if pause_range else (2.0, 5.0)
         time.sleep(random.uniform(float(low), float(high)))
+
+
+def _default_chrome_user_data_dir() -> str:
+    """Best-effort path to the OS default Google Chrome user-data directory."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        return str(home / "Library" / "Application Support" / "Google" / "Chrome")
+    if sys.platform.startswith("win"):
+        return os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+    return str(home / ".config" / "google-chrome")

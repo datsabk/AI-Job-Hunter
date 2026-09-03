@@ -55,3 +55,8 @@ portals:
     max_minutes: 10
     headless: false
     scroll_pause_seconds: [2.0, 5.0]
+    # Optional: drive your REAL logged-in Google Chrome profile instead of a
+    # dedicated Playwright profile. Chrome must be FULLY QUIT first (profile lock).
+    # use_real_chrome: true
+    # chrome_profile: Default          # profile folder name
+    # chrome_user_data_dir: ...        # unset = auto-detect OS default
