@@ -36,13 +36,24 @@ def _csv_list(value: str) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aijobhunter", description="Multi-portal AI job hunter")
-    parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    # Shared options usable before OR after the subcommand (e.g. `-v run` and
+    # `run -v` both work). SUPPRESS avoids the subparser default overwriting a
+    # value set on the top-level parser.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "-v", "--verbose", action="store_true", default=argparse.SUPPRESS,
+        help="debug logging",
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="aijobhunter", description="Multi-portal AI job hunter", parents=[common]
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("keywords", help="extract search keywords from your résumé (interactive)")
+    sub.add_parser("keywords", parents=[common],
+                   help="extract search keywords from your résumé (interactive)")
 
-    run_cmd = sub.add_parser("run", help="collect → parse → keyword-filter → CSV")
+    run_cmd = sub.add_parser("run", parents=[common], help="collect → parse → keyword-filter → CSV")
     run_cmd.add_argument(
         "--stages",
         type=_parse_stages,
@@ -50,10 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"comma-separated subset of {','.join(STAGE_ORDER)} (default: all)",
     )
 
-    sub.add_parser("browse", help="open the TUI to assess/draft jobs on demand")
-    sub.add_parser("status", help="show how many jobs sit at each pipeline status")
+    sub.add_parser("browse", parents=[common], help="open the TUI to assess/draft jobs on demand")
+    sub.add_parser("status", parents=[common], help="show how many jobs sit at each pipeline status")
 
-    csv_cmd = sub.add_parser("export-csv", help="export kept jobs to a CSV file")
+    csv_cmd = sub.add_parser("export-csv", parents=[common], help="export kept jobs to a CSV file")
     csv_cmd.add_argument(
         "path",
         nargs="?",
@@ -98,7 +109,7 @@ def _cmd_keywords(settings: Settings) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    _configure_logging(args.verbose)
+    _configure_logging(getattr(args, "verbose", False))
     settings = Settings()
 
     if args.command == "keywords":
