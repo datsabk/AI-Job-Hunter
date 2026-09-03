@@ -10,6 +10,8 @@ the matched keywords are recorded on the job.
 from __future__ import annotations
 
 import logging
+import re
+from functools import lru_cache
 
 from ..config import Settings, load_keywords
 from ..models import Job
@@ -46,14 +48,27 @@ def run_filter(settings: Settings, store: Store) -> dict[str, int]:
 def match_job(job: Job, include: list[str], exclude: list[str]) -> tuple[bool, int, list[str]]:
     """Return (keep, keyword_score, matched_keywords) for a job.
 
-    ``include``/``exclude`` are already lowercased. Matching is case-insensitive
-    substring matching over the job's title, location, and description.
+    Matching is case-insensitive, **word-boundary** aware over the job's title,
+    company, location, and description — so a short keyword like ``bot`` matches
+    the standalone word ``bot`` but not ``robot`` or ``both``. Multi-word phrases
+    (``data engineering``) are matched as a whole.
     """
-    haystack = f"{job.title}\n{job.company}\n{job.location}\n{job.description}".lower()
+    haystack = f"{job.title}\n{job.company}\n{job.location}\n{job.description}"
 
-    if any(term in haystack for term in exclude):
+    if any(_term_matches(term, haystack) for term in exclude):
         return False, 0, []
 
-    matched = [term for term in include if term in haystack]
+    matched = [term for term in include if _term_matches(term, haystack)]
     keep = len(matched) > 0
     return keep, len(matched), matched
+
+
+def _term_matches(term: str, haystack: str) -> bool:
+    return bool(_term_pattern(term).search(haystack))
+
+
+@lru_cache(maxsize=512)
+def _term_pattern(term: str) -> "re.Pattern[str]":
+    # Word-boundary via lookarounds so it also works for terms with non-word
+    # characters (e.g. "c++", "node.js") without \b's edge cases.
+    return re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.IGNORECASE)

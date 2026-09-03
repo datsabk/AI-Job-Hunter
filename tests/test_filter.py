@@ -44,6 +44,33 @@ def test_match_reject_when_no_include_hit():
     assert keep is False
 
 
+def test_match_is_word_boundary_not_substring():
+    # 'bot' must NOT match inside 'robots' / 'both'.
+    keep, score, matched = match_job(
+        _job(title="Robotics Engineer", description="We support both teams."),
+        include=["bot"],
+        exclude=[],
+    )
+    assert keep is False and matched == []
+
+    # ...but it matches the standalone word 'bot'.
+    keep, score, matched = match_job(
+        _job(title="Support bot Engineer"),
+        include=["bot"],
+        exclude=[],
+    )
+    assert keep is True and matched == ["bot"]
+
+
+def test_match_multiword_phrase_and_case_insensitive():
+    keep, score, matched = match_job(
+        _job(description="Hands-on Machine Learning at scale."),
+        include=["machine learning"],
+        exclude=[],
+    )
+    assert keep is True and matched == ["machine learning"]
+
+
 def test_run_filter_uses_config_and_transitions(settings):
     save_keywords(settings, include=["python"], exclude=["intern"])
     with Store(settings.db_path) as store:
