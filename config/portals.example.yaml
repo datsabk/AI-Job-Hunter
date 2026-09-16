@@ -55,8 +55,17 @@ portals:
     max_minutes: 10
     headless: false
     scroll_pause_seconds: [2.0, 5.0]
-    # Optional: drive your REAL logged-in Google Chrome profile instead of a
-    # dedicated Playwright profile. Chrome must be FULLY QUIT first (profile lock).
+    # Recommended on Chrome >= 136: attach to a Chrome YOU launch yourself,
+    # already logged into LinkedIn. Fully quit Chrome, then run once:
+    #   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    #     --remote-debugging-port=9222 --user-data-dir="$HOME/.li-br-chrome"
+    # log into LinkedIn there, keep it open, then run the hunter.
+    # connect_cdp: true
+    # cdp_port: 9222                   # default 9222
+    # cdp_url: http://localhost:9222   # or the full endpoint explicitly
+    #
+    # Legacy: let the tool launch your real Chrome (BROKEN on Chrome >= 136 for
+    # the default profile — prefer connect_cdp above).
     # use_real_chrome: true
     # chrome_profile: Default          # profile folder name
     # chrome_user_data_dir: ...        # unset = auto-detect OS default

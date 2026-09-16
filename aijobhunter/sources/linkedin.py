@@ -64,8 +64,7 @@ class LinkedInSource(SourceAdapter):
         collected: dict[str, RawJob] = {}
 
         with sync_playwright() as pw:
-            context = self._launch_context(pw, config)
-            page = context.pages[0] if context.pages else context.new_page()
+            page, cleanup = self._launch_page(pw, config)
             try:
                 for url in urls:
                     if time.monotonic() > deadline or len(collected) >= max_cards:
@@ -74,33 +73,81 @@ class LinkedInSource(SourceAdapter):
                         page, url, collected, max_cards, deadline, pause_range, label
                     )
             finally:
-                context.close()
+                cleanup()
 
         logger.info("LinkedIn: collected %d job(s)", len(collected))
         return list(collected.values())
 
-    def _launch_context(self, pw: Any, config: dict[str, Any]) -> Any:
-        """Create the browser context.
+    def _launch_page(self, pw: Any, config: dict[str, Any]) -> tuple[Any, Any]:
+        """Return ``(page, cleanup)`` for the configured launch mode.
 
-        Two modes:
+        Three modes, in priority order:
+
+        * **Attach over CDP** (``cdp_url`` or ``connect_cdp: true``) — connect to a
+          Chrome that YOU launched yourself, already logged in. This is the only
+          approach that reliably reuses your real LinkedIn session on Chrome
+          >= 136: Chrome deliberately refuses automation against the *default*
+          user-data dir, and a Playwright-launched Chrome sets
+          ``navigator.webdriver`` (triggering Google/LinkedIn's "this browser may
+          not be secure" check). A Chrome you started by hand has neither problem.
+          Launch it once with, e.g.::
+
+              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\
+                  --remote-debugging-port=9222 \\
+                  --user-data-dir="$HOME/.li-br-chrome"
+
+          then log into LinkedIn in that window. ``cleanup`` only *disconnects*;
+          it never quits your Chrome.
         * ``use_real_chrome: true`` — launch your installed Google Chrome against
-          your real profile (so you're already logged in). Chrome must be FULLY
-          QUIT first (it locks the profile).
+          your real profile. NOTE: broken on Chrome >= 136 for the default
+          profile (see above); prefer the CDP mode.
         * default — a dedicated persistent Playwright profile (log in once).
         """
         headless = bool(config.get("headless", False))
+
+        cdp_url = _resolve_cdp_url(config)
+        if cdp_url:
+            logger.info("LinkedIn: attaching to your Chrome over CDP at %s", cdp_url)
+            try:
+                browser = pw.chromium.connect_over_cdp(cdp_url)
+            except Exception as exc:  # noqa: BLE001 - give an actionable message
+                raise RuntimeError(
+                    f"Could not attach to Chrome over CDP at {cdp_url}. Start Chrome "
+                    "yourself first (fully quit it, then run):\n"
+                    '  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" '
+                    "--remote-debugging-port=9222 "
+                    '--user-data-dir="$HOME/.li-br-chrome"\n'
+                    "then log into LinkedIn in that window and re-run. "
+                    f"Original error: {exc}"
+                ) from exc
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.new_page()
+
+            def cleanup() -> None:
+                # Close only the tab we opened, then DISCONNECT. Because Chrome
+                # was launched externally, browser.close() detaches Playwright
+                # without quitting the user's Chrome.
+                for closer in (page.close, browser.close):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            return page, cleanup
 
         if config.get("use_real_chrome"):
             user_data_dir = config.get("chrome_user_data_dir") or _default_chrome_user_data_dir()
             profile = config.get("chrome_profile", "Default")
             logger.info(
                 "LinkedIn: launching your real Chrome (profile '%s' at %s). "
-                "Chrome must be fully quit or this will fail on the profile lock.",
+                "Chrome must be fully quit or this will fail on the profile lock. "
+                "NOTE: on Chrome >= 136 this cannot reuse the default profile's "
+                "login — prefer connect_cdp (attach to a Chrome you launched).",
                 profile,
                 user_data_dir,
             )
             try:
-                return pw.chromium.launch_persistent_context(
+                context = pw.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
                     channel="chrome",  # your installed Google Chrome, not bundled Chromium
                     headless=headless,
@@ -112,9 +159,13 @@ class LinkedInSource(SourceAdapter):
                     "is FULLY QUIT (Cmd-Q — it locks the profile while running) and that "
                     f"the profile path exists: {user_data_dir}. Original error: {exc}"
                 ) from exc
+            page = context.pages[0] if context.pages else context.new_page()
+            return page, context.close
 
         profile_dir = config.get("browser_profile_dir") or Settings().browser_profile_dir
-        return pw.chromium.launch_persistent_context(user_data_dir=profile_dir, headless=headless)
+        context = pw.chromium.launch_persistent_context(user_data_dir=profile_dir, headless=headless)
+        page = context.pages[0] if context.pages else context.new_page()
+        return page, context.close
 
     def _collect_from_url(
         self,
@@ -201,6 +252,21 @@ class LinkedInSource(SourceAdapter):
     def _sleep(pause_range: list[float]) -> None:
         low, high = (pause_range + [pause_range[-1]])[:2] if pause_range else (2.0, 5.0)
         time.sleep(random.uniform(float(low), float(high)))
+
+
+def _resolve_cdp_url(config: dict[str, Any]) -> str | None:
+    """Resolve the CDP endpoint to attach to, or ``None`` for a launch mode.
+
+    * ``cdp_url: http://host:port`` — used verbatim.
+    * ``connect_cdp: true`` — builds ``http://localhost:<cdp_port>`` (default 9222).
+    * neither set — returns ``None`` (fall back to a launch mode).
+    """
+    url = config.get("cdp_url")
+    if url:
+        return str(url)
+    if config.get("connect_cdp"):
+        return f"http://localhost:{int(config.get('cdp_port', 9222))}"
+    return None
 
 
 def _default_chrome_user_data_dir() -> str:
