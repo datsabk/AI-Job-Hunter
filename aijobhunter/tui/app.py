@@ -164,19 +164,20 @@ def run_browser(settings: Settings) -> None:
 
         @work(thread=True, exclusive=True)
         def _worker(self, kind: str, jobs: list[Job]) -> None:
+            # Opens its own Store on THIS thread — sqlite3 connections cannot be
+            # shared across threads, so we must not touch self._store here.
             ai = self._ai()
-            for job in jobs:
-                try:
-                    if kind == "assess":
-                        actions.assess_fit(
-                            self._store, ai, job, self._profile, self._settings.score_threshold
-                        )
-                    else:
-                        actions.draft_application(
-                            self._store, ai, job, self._profile, self._settings.output_dir
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    self.call_from_thread(self.notify, f"Error on {job.title}: {exc}")
+            errors = actions.run_actions(
+                kind,
+                self._settings.db_path,
+                ai,
+                jobs,
+                self._profile,
+                score_threshold=self._settings.score_threshold,
+                output_dir=self._settings.output_dir,
+            )
+            for job, exc in errors:
+                self.call_from_thread(self.notify, f"Error on {job.title}: {exc}")
             self.call_from_thread(self._reload_rows)
             self.call_from_thread(self.notify, f"{kind.title()} complete.")
 
